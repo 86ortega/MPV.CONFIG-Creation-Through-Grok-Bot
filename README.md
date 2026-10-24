@@ -16,22 +16,22 @@ mpv auto profiles do not rank each other, so options that several profiles used 
 
 | Option | Default (global) | Changed only by |
 |---|---|---|
-| `target-colorspace-hint` | `no` (SDR sources stay SDR) | `HDR-Output`: any PQ/HLG source, any resolution, including HDR streams |
-| `interpolation`, `video-sync`, `tscale` | `no` / `audio` (24p movies) | `HFR-Motion-Stabilizer` or `Live-Stream`, which never overlap (HFR skips live URLs) |
+| `target-colorspace-hint` | `no` (SDR sources do not enable source-driven HDR signaling; actual output/composition depends on the Windows HDR path) | `HDR-Output`: any PQ/HLG source, any resolution, including HDR streams |
+| `interpolation`, `video-sync`, `tscale` | `no` / `audio` (24p movies) | `HFR-Motion-Stabilizer` (progressive >30 fps, not live) or `Live-Motion` (live URL, progressive), which never overlap |
 | `audio-delay` | `-0.120` (headphone lip-sync) | `music`: `0` |
 | `deinterlace` | off | `Interlaced-Deint-Lock` |
 
-Deband is the one deliberately layered option: the base resolution profile sets a default and a quality tier can override `deband-*` only. Tiers are declared above their base profile; both become true in the same update and mpv evaluates auto profiles in reverse declaration order, so the tier is applied last.
+Deband is the one deliberately layered option: the base resolution profile sets a default and a quality tier can override `deband-*` only. Tiers are declared above their base profile and mpv evaluates auto profiles in reverse declaration order, so the tier is applied after its base. Every base and tier profile writes all of its deband fields explicitly. This layering was validated on the tested mpv build, including playlist transitions (weak to clean 1080p, weak to premium 1080p, weak to ordinary SD, weak to ordinary 4K, 1080p to interlaced to 1080p, 1080p to 60 fps to 1080p, 4K to interlaced SD to SD): every file in a playlist got the same values as when played on its own. Re-test after upgrading mpv.
 
 ## Base profiles
 
 Resolution profiles skip cover art and still images, and live URLs.
 
-**Native 4K** (also matches SDR 4K) uses bilinear scaling, light deband, fruit dither and no shaders, so skies and whites stay calm with no glitter. HDR 4K gets HDR output, with the renderer doing tone and gamut mapping to `target-peak` 2150 using spline tone mapping that follows each scene's measured brightness rather than the mastering metadata. SDR 4K is output as SDR.
+**Native 4K** (also matches SDR 4K) uses bilinear scaling, light deband, fruit dither and no shaders, so skies and whites stay calm with no glitter. HDR 4K gets HDR output, with the renderer doing tone and gamut mapping to `target-peak` 2150 using spline tone mapping that follows each scene's measured brightness rather than the mastering metadata. SDR sources (4K or otherwise) do not enable source-driven HDR signaling here; actual output/composition behavior depends on the Windows HDR path.
 
 **1080p** gets ewa_lanczossharp plus FSRCNNX 2x upscaling, sigmoid upscaling, ordered dither and a light deband (iterations 1, threshold 32, range 16, no added grain) so clean Blu-ray encodes keep their grain. HDR 1080p gets HDR output through the same `HDR-Output` profile as 4K.
 
-**SD and 720p** stay deliberately plain, bilinear with no dither or shaders, because aggressive upscaling just magnifies noise, and dither on soft SD reads as shimmer on an OLED.
+**SD and 720p** stay deliberately plain, bilinear with no dither or shaders, because aggressive upscaling just magnifies noise, and dither on soft SD reads as shimmer on an OLED. Deband is off; its other fields are written as mpv defaults so values from an earlier 4K or 1080p file in a playlist cannot linger.
 
 ## Quality tiers
 
@@ -42,7 +42,7 @@ On top of those base profiles sit quality tiers:
 - **Premium:** remuxes and top encoders like FraMeSToR, r00t and WRATH, or anything over 15 Mbps, get a lighter deband to protect grain.
 - **Default 1080p:** everything else, such as QxR/Tigole, scene x264 and WEB releases, gets the light 1/32/16 deband above.
 - **Weak:** small public encodes like YTS, YIFY, GalaxyRG and RARBG under 8 Mbps, or anything under 3.5 Mbps, get a stronger deband plus added grain. That masks blocking but can't restore detail.
-- **Weak 4K:** low-bitrate 4K re-encodes get their own light deband (under 10 Mbps, or a known small-encode group under 11 Mbps).
+- **Weak 4K:** low-bitrate 4K re-encodes get their own light deband (under 10 Mbps, or a known small-encode group such as QxR or Tigole under 11 Mbps). The group tag must be a delimited word: preceded by a space, `[`, `(` or `-`, and followed by `)`, `]`, or `.ext` at the end of the path, so `(Tigole)`, `-Tigole.mkv` and ` Tigole.mkv` match but words inside titles do not.
 - **Extras:** featurettes, deleted scenes and other bonus folders don't inherit the main movie's release tag, so they're tiered by their own bitrate.
 - **TV:** episodes are detected by path (any folder starting with "TV Series") and tiered by bitrate alone.
 
@@ -51,7 +51,8 @@ On top of those base profiles sit quality tiers:
 - **Interlaced** sources stay deinterlaced for the whole file and are kept out of motion interpolation. `scripts/interlace-latch.lua` sets `user-data/ilace` the first time a frame of the current file is flagged interlaced and resets it on every new file. The `Interlaced-Deint-Lock` profile and the HFR check both key off that flag. Without the script, deinterlacing never turns on.
 - **High frame rate** progressive content over 30 fps gets interpolation (temporal blending to smooth cadence, not frame generation) with display-resample at every resolution. Live URLs, music files and cover art are excluded.
 - **Music** (FLAC, WAV, ALAC, M4A, APE, DSF) plays through WASAPI with ReplayGain, gapless playback and `audio-delay=0`, since there's no picture to lip-sync. Cover art and still images never trigger the resolution, tier, HFR or HDR profiles, so a 600x600 album cover isn't treated as an SD movie.
-- **Live-Stream** matches by URL, not by whether the stream is actually live: http/https URLs whose path ends in `.m3u8`, `.mpd` or `.ts`, optionally followed by `?query` or `#fragment`. That means on-demand HLS/DASH matches too. It gets ArtCNN, KrigBilateral, adaptive-sharpen, reconnect handling, a small in-memory cache, its own motion settings and a brightness/contrast/saturation boost (applied to every matched stream, SDR or HDR). Every resolution, tier and HFR profile skips these URLs. Local files never match.
+- **Live-Stream** matches by URL, not by whether the stream is actually live: http/https URLs whose path ends in `.m3u8`, `.mpd` or `.ts`, optionally followed by `?query` or `#fragment`. That means on-demand HLS/DASH matches too. It gets ArtCNN, KrigBilateral, adaptive-sharpen, reconnect handling, a small in-memory cache and a brightness/contrast/saturation boost (applied to every matched stream, SDR or HDR). Every resolution, tier and HFR profile skips these URLs. Local files never match.
+- **Live-Motion** uses the same URL test but only for progressive streams: it adds display-resample and interpolation for smoother pans. Interlaced streams (the same per-file `user-data/ilace` latch) skip it and stay deinterlaced; Live-Stream itself still applies to them.
 
 ## Audio
 
@@ -61,7 +62,7 @@ Audio is tailored to Sony XM5 headphones: 5.1 and 7.1 are downmixed to stereo wi
 
 - Keys **7** and **8** switch picture presets (bind them in your `input.conf`):
   - **Cinema-Night** is a neutral director reset: brightness, contrast, saturation and gamma all 0.
-  - **Cinema-Day** adds a mild lift.
+  - **Cinema-Day** adds a mild lift: gamma 3, brightness 1, contrast and saturation 0.
   ```
   7 apply-profile Cinema-Night ; show-text "Cinema-Night"
   8 apply-profile Cinema-Day ; show-text "Cinema-Day"
